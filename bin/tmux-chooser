@@ -5,11 +5,14 @@
 # Usage: Set as iTerm profile command (Settings -> Profiles -> General -> Command)
 #   Up/Down  navigate
 #   Enter:
-#     session line  → attach session (or focus existing iTerm window)
+#     session line  → attach session (or focus if already open)
 #     window line   → attach session + focus that window
 #     [+ new]       → create new session
+#     [refresh]     → reload session/window list
 #   Type  filter
 #   Esc   drop to plain shell
+#
+# Loops back to picker after focusing an existing session or refreshing.
 
 TMUX=/opt/homebrew/bin/tmux
 FZF=/opt/homebrew/bin/fzf
@@ -42,6 +45,8 @@ EOF
   )
   [[ "$result" == "focused" ]]
 }
+
+while true; do
 
 sessions=$($TMUX ls -F '#{session_name}' 2>/dev/null)
 
@@ -88,6 +93,7 @@ while IFS= read -r s; do
       done
 done <<< "$sessions"
 tree+="_NEW_SESSION_${SEP}_NEW_SESSION_${SEP}\033[1m[+ new session]\033[0m"
+tree+="_REFRESH_${SEP}_REFRESH_${SEP}\033[2m[↻ refresh]\033[0m"
 
 selection=$(printf "$tree" \
   | $FZF --ansi \
@@ -101,7 +107,9 @@ selection=$(printf "$tree" \
 session_name=$(echo "$selection" | awk -F"$SEP" '{print $1}')
 action=$(echo "$selection" | awk -F"$SEP" '{print $2}')
 
-if [[ -z "$session_name" ]]; then
+if [[ "$session_name" == "_REFRESH_" ]]; then
+  continue
+elif [[ -z "$session_name" ]]; then
   exec /bin/zsh -l
 elif [[ "$session_name" == "_NEW_SESSION_" ]]; then
   printf "Session name: "
@@ -109,16 +117,15 @@ elif [[ "$session_name" == "_NEW_SESSION_" ]]; then
   [[ -z "$name" ]] && name="session-$(date +%s)"
   exec $TMUX -CC new-session -s "$name"
 elif has_cc_client "$session_name"; then
-  # Session already open in iTerm — focus that window, close this chooser window
+  # Session already open in iTerm — focus that window, loop back to picker
   if [[ "$action" != "_NEW_WINDOW_" ]]; then
     $TMUX select-window -t "$session_name:$action" 2>/dev/null
   fi
-  if focus_cc_session "$session_name"; then
-    exit 0  # close this chooser window since we focused the existing one
-  else
-    printf "Couldn't find iTerm window — attaching normally.\n"
-    exec $TMUX -CC new-session -A -s "$session_name"
+  if ! focus_cc_session "$session_name"; then
+    printf "\033[31mCouldn't find iTerm window for '%s'\033[0m\n" "$session_name"
+    sleep 1
   fi
+  continue
 elif [[ "$action" == "_NEW_WINDOW_" ]]; then
   # Session line: create a new window, then attach
   $TMUX new-window -t "$session_name"
@@ -128,3 +135,5 @@ else
   $TMUX select-window -t "$session_name:$action"
   exec $TMUX -CC new-session -A -s "$session_name"
 fi
+
+done  # end refresh loop
