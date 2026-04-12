@@ -1,0 +1,100 @@
+#!/bin/zsh
+# tmux dashboard — persistent session/window launcher for iTerm2 CC mode
+# Stays open. Each selection spawns a new iTerm CC window. Loops back.
+#
+# Usage: Run in any terminal. Keep it open as your tmux control panel.
+#   ↑/↓  navigate
+#   Enter:
+#     session line  → open session + new window in new iTerm window
+#     window line   → open session focused on that window in new iTerm window
+#     [+ new]       → create new session in new iTerm window
+#   Type  filter
+#   Esc/q quit dashboard
+
+TMUX=/opt/homebrew/bin/tmux
+FZF=/opt/homebrew/bin/fzf
+SEP='§'
+
+launch_cc() {
+  local cmd="$1"
+  osascript -e "
+    tell application \"iTerm2\"
+      create window with default profile command \"$cmd\"
+    end tell
+  " &>/dev/null &
+}
+
+while true; do
+  sessions=$($TMUX ls -F '#{session_name}' 2>/dev/null)
+
+  if [[ -z "$sessions" ]]; then
+    printf "\033[1mNo tmux sessions.\033[0m\n"
+    printf "New session name [main]: "
+    read name
+    [[ -z "$name" ]] && name="main"
+    launch_cc "$TMUX -CC new-session -s '$name'"
+    sleep 1
+    continue
+  fi
+
+  # Build tree
+  tree=""
+  while IFS= read -r s; do
+    attached=""
+    $TMUX ls -F '#{session_name}:#{?session_attached,1,0}' 2>/dev/null \
+      | grep -q "^${s}:1$" && attached=" (attached)"
+    tree+="${s}${SEP}_NEW_WINDOW_${SEP}\033[1m${s}\033[0m${attached}\n"
+    $TMUX list-windows -t "$s" -F '#{window_index}:#{window_name}:#{?window_active,*,}' 2>/dev/null \
+      | while IFS=: read -r widx wname wactive; do
+          cmds=$($TMUX list-panes -t "$s:$widx" -F '#{pane_current_command}' 2>/dev/null \
+            | paste -sd, - | sed 's/,/, /g')
+          unique_cmds=$(echo "$cmds" | tr ', ' '\n' | grep -v '^$' | sort -u)
+          if [[ "$unique_cmds" == "$wname" ]]; then
+            npanes=$($TMUX list-panes -t "$s:$widx" -F x 2>/dev/null | wc -l | tr -d ' ')
+            if (( npanes > 1 )); then
+              detail="${npanes} panes"
+            else
+              detail=""
+            fi
+          else
+            detail="$cmds"
+          fi
+          if [[ -n "$detail" ]]; then
+            tree+="${s}${SEP}${widx}${SEP}      \033[2m${widx}: ${wname} (${detail})${wactive}\033[0m\n"
+          else
+            tree+="${s}${SEP}${widx}${SEP}      \033[2m${widx}: ${wname}${wactive}\033[0m\n"
+          fi
+        done
+  done <<< "$sessions"
+  tree+="_NEW_SESSION_${SEP}_NEW_SESSION_${SEP}\033[1m[+ new session]\033[0m"
+
+  selection=$(printf "$tree" \
+    | $FZF --ansi \
+           --delimiter="$SEP" \
+           --with-nth=3.. \
+           --prompt="tmux> " \
+           --header="↑↓ navigate · enter open in new window · esc quit" \
+           --reverse \
+           --no-info)
+
+  session_name=$(echo "$selection" | awk -F"$SEP" '{print $1}')
+  action=$(echo "$selection" | awk -F"$SEP" '{print $2}')
+
+  # Esc or empty — quit dashboard
+  [[ -z "$session_name" ]] && break
+
+  if [[ "$session_name" == "_NEW_SESSION_" ]]; then
+    printf "Session name: "
+    read name
+    [[ -z "$name" ]] && name="session-$(date +%s)"
+    launch_cc "$TMUX -CC new-session -s '$name'"
+  elif [[ "$action" == "_NEW_WINDOW_" ]]; then
+    $TMUX new-window -t "$session_name"
+    launch_cc "$TMUX -CC new-session -A -s '$session_name'"
+  else
+    $TMUX select-window -t "$session_name:$action"
+    launch_cc "$TMUX -CC new-session -A -s '$session_name'"
+  fi
+
+  sleep 1  # let iTerm window spawn before refreshing
+done

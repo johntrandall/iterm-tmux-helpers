@@ -1,0 +1,88 @@
+#!/bin/zsh
+# tmux session chooser for iTerm2 CC mode
+# Runs as iTerm profile command. Shows session tree with arrow-key navigation.
+#
+# Usage: Set as iTerm profile command (Settings → Profiles → General → Command)
+#   ↑/↓  navigate
+#   Enter:
+#     session line  → attach session + open new window
+#     window line   → attach session + focus that window
+#     [+ new]       → create new session
+#   Type  filter
+#   Esc   drop to plain shell
+
+TMUX=/opt/homebrew/bin/tmux
+FZF=/opt/homebrew/bin/fzf
+SEP='§'
+
+sessions=$($TMUX ls -F '#{session_name}' 2>/dev/null)
+
+if [[ -z "$sessions" ]]; then
+  printf "No tmux sessions running.\n\n"
+  printf "New session name [main]: "
+  read name
+  [[ -z "$name" ]] && name="main"
+  exec $TMUX -CC new-session -s "$name"
+fi
+
+# Build tree: hidden prefix = session_name%%action%%display
+tree=""
+while IFS= read -r s; do
+  attached=""
+  $TMUX ls -F '#{session_name}:#{?session_attached,1,0}' 2>/dev/null \
+    | grep -q "^${s}:1$" && attached=" (attached)"
+  tree+="${s}${SEP}_NEW_WINDOW_${SEP}\033[1m${s}\033[0m${attached}\n"
+  $TMUX list-windows -t "$s" -F '#{window_index}:#{window_name}:#{?window_active,*,}' 2>/dev/null \
+    | while IFS=: read -r widx wname wactive; do
+        # Get all pane commands for this window
+        cmds=$($TMUX list-panes -t "$s:$widx" -F '#{pane_current_command}' 2>/dev/null \
+          | paste -sd, - | sed 's/,/, /g')
+        # Suppress commands if they all match the window name
+        unique_cmds=$(echo "$cmds" | tr ', ' '\n' | grep -v '^$' | sort -u)
+        if [[ "$unique_cmds" == "$wname" ]]; then
+          npanes=$($TMUX list-panes -t "$s:$widx" -F x 2>/dev/null | wc -l | tr -d ' ')
+          if (( npanes > 1 )); then
+            detail="${npanes} panes"
+          else
+            detail=""
+          fi
+        else
+          detail="$cmds"
+        fi
+        if [[ -n "$detail" ]]; then
+          tree+="${s}${SEP}${widx}${SEP}      \033[2m${widx}: ${wname} (${detail})${wactive}\033[0m\n"
+        else
+          tree+="${s}${SEP}${widx}${SEP}      \033[2m${widx}: ${wname}${wactive}\033[0m\n"
+        fi
+      done
+done <<< "$sessions"
+tree+="_NEW_SESSION_${SEP}_NEW_SESSION_${SEP}\033[1m[+ new session]\033[0m"
+
+selection=$(printf "$tree" \
+  | $FZF --ansi \
+         --delimiter="$SEP" \
+         --with-nth=3.. \
+         --prompt="tmux> " \
+         --header="↑↓ navigate · enter select · type filter · esc shell" \
+         --reverse \
+         --no-info)
+
+session_name=$(echo "$selection" | awk -F"$SEP" '{print $1}')
+action=$(echo "$selection" | awk -F"$SEP" '{print $2}')
+
+if [[ -z "$session_name" ]]; then
+  exec /bin/zsh -l
+elif [[ "$session_name" == "_NEW_SESSION_" ]]; then
+  printf "Session name: "
+  read name
+  [[ -z "$name" ]] && name="session-$(date +%s)"
+  exec $TMUX -CC new-session -s "$name"
+elif [[ "$action" == "_NEW_WINDOW_" ]]; then
+  # Session line: create a new window, then attach
+  $TMUX new-window -t "$session_name"
+  exec $TMUX -CC new-session -A -s "$session_name"
+else
+  # Window line: focus that window, then attach
+  $TMUX select-window -t "$session_name:$action"
+  exec $TMUX -CC new-session -A -s "$session_name"
+fi
