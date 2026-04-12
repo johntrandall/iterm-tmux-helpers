@@ -3,10 +3,10 @@
 # Stays open. Each selection spawns a new iTerm CC window. Loops back.
 #
 # Usage: Run in any terminal. Keep it open as your tmux control panel.
-#   ↑/↓  navigate
+#   Up/Down  navigate
 #   Enter:
-#     session line  → open session + new window in new iTerm window
-#     window line   → open session focused on that window in new iTerm window
+#     session line  → open session in new iTerm window (or focus if already open)
+#     window line   → open session focused on that window (or focus if open)
 #     [+ new]       → create new session in new iTerm window
 #   Type  filter
 #   Esc/q quit dashboard
@@ -14,6 +14,34 @@
 TMUX=/opt/homebrew/bin/tmux
 FZF=/opt/homebrew/bin/fzf
 SEP='§'
+
+# Check if a tmux session has a CC (control mode) client attached
+has_cc_client() {
+  $TMUX list-clients -t "$1" -F '#{client_control_mode}' 2>/dev/null | grep -q '^1$'
+}
+
+# Focus the iTerm window mirroring a tmux CC session.
+# iTerm names CC windows "↣ <session>: <window> ..."; match on that prefix.
+# Returns 0 if focused, 1 if not found.
+focus_cc_session() {
+  local session="$1"
+  local prefix="↣ ${session}:"
+  local result
+  result=$(osascript <<EOF 2>/dev/null
+tell application "iTerm2"
+  set targetPrefix to "$prefix"
+  repeat with w in windows
+    if name of w starts with targetPrefix then
+      select w
+      return "focused"
+    end if
+  end repeat
+  return "notfound"
+end tell
+EOF
+  )
+  [[ "$result" == "focused" ]]
+}
 
 launch_cc() {
   local cmd="$1"
@@ -40,9 +68,14 @@ while true; do
   # Build tree
   tree=""
   while IFS= read -r s; do
-    attached=""
-    $TMUX ls -F '#{session_name}:#{?session_attached,1,0}' 2>/dev/null \
-      | grep -q "^${s}:1$" && attached=" (attached)"
+    if has_cc_client "$s"; then
+      attached=" \033[33m(open in iTerm)\033[0m"
+    elif $TMUX ls -F '#{session_name}:#{?session_attached,1,0}' 2>/dev/null \
+         | grep -q "^${s}:1$"; then
+      attached=" (attached)"
+    else
+      attached=""
+    fi
     tree+="${s}${SEP}_NEW_WINDOW_${SEP}\033[1m${s}\033[0m${attached}\n"
     $TMUX list-windows -t "$s" -F '#{window_index}:#{window_name}:#{?window_active,*,}' 2>/dev/null \
       | while IFS=: read -r widx wname wactive; do
@@ -73,7 +106,7 @@ while true; do
            --delimiter="$SEP" \
            --with-nth=3.. \
            --prompt="tmux> " \
-           --header="↑↓ navigate · enter open in new window · esc quit" \
+           --header="enter open/focus · esc quit" \
            --reverse \
            --no-info)
 
@@ -88,6 +121,15 @@ while true; do
     read name
     [[ -z "$name" ]] && name="session-$(date +%s)"
     launch_cc "$TMUX -CC new-session -s '$name'"
+  elif has_cc_client "$session_name"; then
+    # Session already open in iTerm — focus it instead of spawning a duplicate
+    if [[ "$action" != "_NEW_WINDOW_" ]]; then
+      $TMUX select-window -t "$session_name:$action" 2>/dev/null
+    fi
+    if ! focus_cc_session "$session_name"; then
+      printf "\033[31mCouldn't find iTerm window for '%s'\033[0m\n" "$session_name"
+      sleep 1
+    fi
   elif [[ "$action" == "_NEW_WINDOW_" ]]; then
     $TMUX new-window -t "$session_name"
     launch_cc "$TMUX -CC new-session -A -s '$session_name'"
