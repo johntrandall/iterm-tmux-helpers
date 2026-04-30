@@ -67,6 +67,23 @@ check_dep "tmux" tmux "brew install tmux"
 check_dep "fzf"  fzf  "brew install fzf"
 check_dep "python3" python3 "macOS ships python3; or brew install python"
 
+# Version-verified-against check (advisory, non-fatal)
+VERIFIED_TMUX_VERSION="3.6a"
+VERIFIED_ITERM_VERSION="3.6"
+if command -v tmux >/dev/null 2>&1; then
+    running_tmux="$(tmux -V 2>/dev/null | awk '{print $2}')"
+    if [ -n "$running_tmux" ] && [ "$running_tmux" != "$VERIFIED_TMUX_VERSION" ]; then
+        echo "  ⚠ tmux $running_tmux is untested (verified: $VERIFIED_TMUX_VERSION) — should still work, but behavior may differ"
+    fi
+fi
+if [ -f /Applications/iTerm.app/Contents/Info.plist ]; then
+    running_iterm="$(defaults read /Applications/iTerm.app/Contents/Info.plist CFBundleShortVersionString 2>/dev/null)"
+    running_iterm_mm="${running_iterm%.*}"
+    if [ -n "$running_iterm" ] && [ "$running_iterm_mm" != "$VERIFIED_ITERM_VERSION" ]; then
+        echo "  ⚠ iTerm2 $running_iterm is untested (verified: ${VERIFIED_ITERM_VERSION}.x) — should still work, but behavior may differ"
+    fi
+fi
+
 if command -v python3 >/dev/null 2>&1; then
     if python3 -c "import iterm2" 2>/dev/null; then
         echo "  ✓ python3 'iterm2' package importable"

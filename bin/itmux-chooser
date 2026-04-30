@@ -18,6 +18,21 @@ TMUX=/opt/homebrew/bin/tmux
 FZF=/opt/homebrew/bin/fzf
 SEP='§'
 
+# Version warning (non-fatal). Suppressed by ITMUX_SUPPRESS_VERSION_WARN=1.
+VERIFIED_TMUX_VERSION="3.6a"
+VERIFIED_ITERM_VERSION="3.6"
+if [[ -z "${ITMUX_SUPPRESS_VERSION_WARN:-}" ]]; then
+  _tmux_v="$($TMUX -V 2>/dev/null | awk '{print $2}')"
+  _iterm_v="$(defaults read /Applications/iTerm.app/Contents/Info.plist CFBundleShortVersionString 2>/dev/null)"
+  _iterm_mm="${_iterm_v%.*}"
+  _issues=()
+  [[ -n "$_tmux_v" && "$_tmux_v" != "$VERIFIED_TMUX_VERSION" ]] && _issues+=("tmux $_tmux_v (verified: $VERIFIED_TMUX_VERSION)")
+  [[ -n "$_iterm_v" && "$_iterm_mm" != "$VERIFIED_ITERM_VERSION" ]] && _issues+=("iTerm2 $_iterm_v (verified: ${VERIFIED_ITERM_VERSION}.x)")
+  if (( ${#_issues[@]} > 0 )); then
+    print -u2 "⚠ itmux: untested against ${(j: and :)_issues} — behavior may differ. Set ITMUX_SUPPRESS_VERSION_WARN=1 to silence."
+  fi
+fi
+
 # Check if a tmux session has a CC (control mode) client attached
 has_cc_client() {
   $TMUX list-clients -t "$1" -F '#{client_control_mode}' 2>/dev/null | grep -q '^1$'

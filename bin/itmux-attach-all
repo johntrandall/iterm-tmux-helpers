@@ -9,9 +9,14 @@ tmux-attach-all: attach every detached tmux session as its own iTerm window.
 """
 
 import asyncio
+import os
 import subprocess
 import sys
 import iterm2
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from _version_check import warn_if_versions_unverified  # noqa: E402
+warn_if_versions_unverified()
 
 TMUX = "/opt/homebrew/bin/tmux"
 TAB_LIMIT = 5
