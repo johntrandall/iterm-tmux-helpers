@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""
+tmux-iterm-tidy: regroup iTerm tmux-backed tabs so each tmux session has
+its own iTerm window, with its tmux windows as tabs in tmuxWindow-ID order.
+
+Use after drag-and-drop reshuffling has scattered tmux session tabs across
+multiple iTerm windows, or when one iTerm window holds tabs from several
+sessions. Reads current iTerm state, decides the desired layout, applies it.
+
+Does NOT attach any detached sessions — pair with `tmux-attach-all` for that.
+Does NOT touch non-tmux iTerm tabs.
+
+Default: dry-run (lists planned moves). Pass --apply to actually rearrange.
+"""
+
+import argparse
+import asyncio
+import subprocess
+import sys
+
+import iterm2
+
+TMUX = "/opt/homebrew/bin/tmux"
+
+
+def tmux_window_to_session_map():
+    """Return {tmux_window_id_int: session_name} for every window on the server.
+
+    tmux window IDs are like '@20'; we strip the '@' and return as int to match
+    iTerm's `tmuxWindow` variable (which is the integer form).
+    """
+    r = subprocess.run(
+        [TMUX, "list-windows", "-a", "-F", "#{window_id}\t#{session_name}"],
+        capture_output=True, text=True,
+    )
+    out = {}
+    for line in r.stdout.strip().split("\n"):
+        if not line:
+            continue
+        wid, sess = line.split("\t", 1)
+        wid = wid.lstrip("@")
+        try:
+            out[int(wid)] = sess
+        except ValueError:
+            continue
+    return out
+
+
+async def gather_layout(app, wid_to_session):
+    """Build {session_name: [(tmux_window_id, tab, source_window), ...]}."""
+    by_session = {}
+    for w in app.terminal_windows:
+        for tab in list(w.tabs):
+            tw_var = await tab.async_get_variable("tmuxWindow")
+            if tw_var is None:
+                continue
+            try:
+                tw_id = int(tw_var)
+            except (TypeError, ValueError):
+                continue
+            if tw_id < 0:
+                continue
+            sess = wid_to_session.get(tw_id)
+            if not sess:
+                continue
+            by_session.setdefault(sess, []).append((tw_id, tab, w))
+    for sess in by_session:
+        by_session[sess].sort(key=lambda x: x[0])
+    return by_session
+
+
+def is_clean(session_entries):
+    """True if all session tabs are in one iTerm window AND that window holds only session tabs."""
+    if not session_entries:
+        return True
+    windows = {w.window_id for _, _, w in session_entries}
+    if len(windows) != 1:
+        return False
+    only_window = session_entries[0][2]
+    return len(list(only_window.tabs)) == len(session_entries)
+
+
+def pick_dest(session_entries):
+    """Pick the iTerm window that already holds the most tabs of this session."""
+    counts = {}
+    window_ref = {}
+    for _, _, w in session_entries:
+        counts[w.window_id] = counts.get(w.window_id, 0) + 1
+        window_ref[w.window_id] = w
+    best = max(counts, key=counts.get)
+    return window_ref[best]
+
+
+async def main(connection, apply):
+    app = await iterm2.async_get_app(connection)
+    wid_to_session = tmux_window_to_session_map()
+    by_session = await gather_layout(app, wid_to_session)
+
+    if not by_session:
+        print("No tmux-backed iTerm tabs found.")
+        return
+
+    plan = []
+    for sess, entries in by_session.items():
+        if is_clean(entries):
+            print(f"  {sess}: already clean ({len(entries)} tabs)")
+            continue
+        dest = pick_dest(entries)
+        plan.append((sess, dest, entries))
+        n_in_dest = sum(1 for _, _, w in entries if w.window_id == dest.window_id)
+        print(f"  {sess}: {len(entries)} tabs across "
+              f"{len({w.window_id for _, _, w in entries})} windows "
+              f"→ consolidate into window {dest.window_id} "
+              f"(already has {n_in_dest})")
+
+    if not plan:
+        print("\nNothing to do — all sessions already tidy.")
+        return
+
+    if not apply:
+        print("\n(dry-run) — pass --apply to actually rearrange.")
+        return
+
+    print()
+    for sess, dest, entries in plan:
+        ordered_tabs = [tab for _, tab, _ in entries]
+        try:
+            await dest.async_set_tabs(ordered_tabs)
+            print(f"  ✓ {sess}: regrouped {len(ordered_tabs)} tabs into one window")
+        except Exception as e:
+            print(f"  ✗ {sess}: {e}", file=sys.stderr)
+        await app.async_refresh()
+
+    print("\nDone.")
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    p.add_argument("--apply", action="store_true",
+                   help="actually rearrange (default is dry-run)")
+    return p.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    iterm2.run_until_complete(lambda c: main(c, args.apply))

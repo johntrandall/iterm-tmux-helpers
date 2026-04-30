@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""
+tmux-rename-from-iterm: push any iTerm-side tab title overrides down to tmux.
+
+Recovery tool for when someone manually edited iTerm tab titles (which doesn't
+propagate to tmux) and wants to make those names stick.
+
+For every tmux-backed iTerm tab:
+  - Read the iTerm display title.
+  - If it differs from tmux's window_name, rename the tmux window to match.
+  - Clear iTerm's title override so iTerm goes back to following tmux.
+
+Default action is dry-run (lists what would change). Pass --apply to actually rename.
+
+Usage:
+  tmux-rename-from-iterm           # dry-run
+  tmux-rename-from-iterm --apply   # do it
+"""
+
+import argparse
+import asyncio
+import re
+import subprocess
+import sys
+
+import iterm2
+
+TMUX = "/opt/homebrew/bin/tmux"
+WINDOW_PREFIX_RE = re.compile(r"^↣ ([^:]+):\s*(.*?)(?:\s+\(.*?\))?(?:\s+\[.*?\])?$")
+
+
+def tmux_window_name(session, window_idx):
+    r = subprocess.run(
+        [TMUX, "display-message", "-p", "-t", f"{session}:{window_idx}", "#{window_name}"],
+        capture_output=True, text=True,
+    )
+    return r.stdout.strip()
+
+
+def tmux_rename_window(session, window_idx, new_name):
+    r = subprocess.run(
+        [TMUX, "rename-window", "-t", f"{session}:{window_idx}", new_name],
+        capture_output=True, text=True,
+    )
+    return r.returncode == 0
+
+
+def normalize_iterm_title(raw):
+    """iTerm tab/session names often include trailing decorations like ' (-zsh)'.
+    Strip the most common shell/profile suffixes so we compare just the user-visible name.
+    """
+    if not raw:
+        return raw
+    # Drop trailing ' (-something)' shell indicators
+    cleaned = re.sub(r"\s+\(-?\w+\)\s*$", "", raw)
+    # Drop trailing ' [Profile Name]' profile indicators
+    cleaned = re.sub(r"\s+\[.*?\]\s*$", "", cleaned)
+    return cleaned.strip()
+
+
+async def gather_proposed_renames(app):
+    proposals = []
+    for w in app.terminal_windows:
+        wname = await w.async_get_variable("title") or ""
+        m = WINDOW_PREFIX_RE.match(wname)
+        if not m:
+            continue
+        session = m.group(1)
+        for tab in w.tabs:
+            tmux_win = await tab.async_get_variable("tmuxWindow")
+            if not tmux_win:
+                continue
+            current_session = tab.current_session
+            if current_session is None:
+                continue
+            iterm_name = await current_session.async_get_variable("name") or ""
+            iterm_clean = normalize_iterm_title(iterm_name)
+            tmx_name = tmux_window_name(session, tmux_win)
+            if iterm_clean and tmx_name and iterm_clean != tmx_name:
+                proposals.append((session, tmux_win, tmx_name, iterm_clean, tab))
+    return proposals
+
+
+async def main(connection, apply):
+    app = await iterm2.async_get_app(connection)
+    proposals = await gather_proposed_renames(app)
+
+    if not proposals:
+        print("No iTerm tab overrides to push down — every tab title matches tmux.")
+        return
+
+    print(f"Found {len(proposals)} tab(s) with iTerm-side renames not in tmux:")
+    for session, win, tmx, iterm, _tab in proposals:
+        print(f"  {session}:{win}  tmux=[{tmx}]  iTerm=[{iterm}]")
+
+    if not apply:
+        print("\n(dry-run) — pass --apply to push these to tmux")
+        return
+
+    print()
+    n_ok = 0
+    for session, win, tmx, iterm, tab in proposals:
+        if tmux_rename_window(session, win, iterm):
+            try:
+                await tab.async_set_title("")
+            except Exception as e:
+                print(f"  ⚠ {session}:{win} renamed in tmux but couldn't clear iTerm override: {e}")
+            n_ok += 1
+            print(f"  ✓ {session}:{win} → '{iterm}'")
+        else:
+            print(f"  ✗ {session}:{win} tmux rename failed")
+    print(f"\n{n_ok}/{len(proposals)} renamed. iTerm will resume following tmux for those tabs.")
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    p.add_argument("--apply", action="store_true", help="actually rename (default is dry-run)")
+    return p.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    iterm2.run_until_complete(lambda c: main(c, args.apply))

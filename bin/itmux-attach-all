@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""
+tmux-attach-all: attach every detached tmux session as its own iTerm window.
+
+- 1 tmux session = 1 iTerm window (tmux windows render as tabs)
+- Already-CC-attached sessions are skipped (no duplicate gateways)
+- Sessions with more than TAB_LIMIT windows spill into additional iTerm
+  windows of TAB_LIMIT tabs each
+"""
+
+import asyncio
+import subprocess
+import sys
+import iterm2
+
+TMUX = "/opt/homebrew/bin/tmux"
+TAB_LIMIT = 5
+ATTACH_TIMEOUT = 12.0
+POLL_INTERVAL = 0.4
+INTER_ATTACH_DELAY = 0.4
+
+
+def list_tmux_sessions():
+    out = subprocess.check_output(
+        [TMUX, "ls", "-F", "#{session_name}\t#{session_windows}"],
+        text=True,
+    )
+    sessions = []
+    for line in out.strip().split("\n"):
+        if not line:
+            continue
+        name, n = line.split("\t", 1)
+        sessions.append((name, int(n)))
+    return sessions
+
+
+def has_cc_client(session):
+    r = subprocess.run(
+        [TMUX, "list-clients", "-t", session, "-F", "#{client_control_mode}"],
+        capture_output=True,
+        text=True,
+    )
+    return any(line == "1" for line in r.stdout.strip().split("\n") if line)
+
+
+async def find_attached_window(app, session, expected_tabs, timeout):
+    """Wait for an iTerm window titled '↣ <session>:...' with >= expected_tabs."""
+    prefix = f"↣ {session}:"
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        await app.async_refresh()
+        for w in app.terminal_windows:
+            title = await w.async_get_variable("title") or ""
+            if title.startswith(prefix) and len(w.tabs) >= min(expected_tabs, TAB_LIMIT + 1):
+                return w
+        await asyncio.sleep(POLL_INTERVAL)
+    return None
+
+
+async def spill_window(window, limit):
+    """Move tabs past `limit` into new iTerm windows of `limit` tabs each.
+
+    Returns the number of additional windows created.
+    """
+    tabs = list(window.tabs)
+    if len(tabs) <= limit:
+        return 0
+
+    overflow = tabs[limit:]
+    chunks_made = 0
+    for i in range(0, len(overflow), limit):
+        chunk = overflow[i:i + limit]
+        new_w = await chunk[0].async_move_to_window()
+        if new_w is None:
+            print(f"    ⚠ async_move_to_window returned None", file=sys.stderr)
+            continue
+        if len(chunk) > 1:
+            existing = list(new_w.tabs)
+            await new_w.async_set_tabs(existing + chunk[1:])
+        chunks_made += 1
+    return chunks_made
+
+
+async def attach_session(connection, app, name, n_windows):
+    safe = name.replace("'", "'\\''")
+    cmd = f"{TMUX} -CC attach -t '{safe}'"
+    created = await iterm2.Window.async_create(connection, command=cmd)
+    if created is None:
+        print(f"  ✗ create_window failed", file=sys.stderr)
+        return
+
+    if n_windows <= TAB_LIMIT:
+        return
+
+    target = await find_attached_window(app, name, n_windows, ATTACH_TIMEOUT)
+    if target is None:
+        print(f"  ⚠ couldn't locate attached window within {ATTACH_TIMEOUT}s; skipping spill")
+        return
+
+    # Wait for all tabs to materialize before redistributing
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + ATTACH_TIMEOUT
+    while len(target.tabs) < n_windows and loop.time() < deadline:
+        await app.async_refresh()
+        await asyncio.sleep(POLL_INTERVAL)
+
+    extra = await spill_window(target, TAB_LIMIT)
+    if extra:
+        print(f"  ↳ spilled {n_windows - TAB_LIMIT} tabs into {extra} extra window(s)")
+
+
+async def main(connection):
+    app = await iterm2.async_get_app(connection)
+    sessions = list_tmux_sessions()
+    print(f"Found {len(sessions)} tmux sessions")
+    for name, n in sessions:
+        if has_cc_client(name):
+            print(f"skip {name} ({n} windows, already CC-attached)")
+            continue
+        print(f"attach {name} ({n} windows)")
+        try:
+            await attach_session(connection, app, name, n)
+        except Exception as e:
+            print(f"  ✗ {e}", file=sys.stderr)
+        await asyncio.sleep(INTER_ATTACH_DELAY)
+    print("done")
+
+
+iterm2.run_until_complete(main)
