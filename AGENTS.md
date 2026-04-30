@@ -40,7 +40,7 @@ itmux-attach-all
 # 3. Use the iTerm Python API to scramble tabs into a deliberate bad state
 #    (multiple sessions sharing one mixed iTerm window, sessions split across
 #    multiple windows, etc.). Drive the API via:
-/Users/johnrandall/.local/pipx/venvs/it2/bin/python  # the iTerm-aware Python
+PYTHON="$(brew --prefix)/opt/iterm-tmux-helpers/libexec/bin/python"  # the brew-installed venv with iterm2
 
 # 4. Run the actual binary, dry-run first, then --apply.
 itmux-tidy-from-tmux

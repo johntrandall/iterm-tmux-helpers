@@ -23,9 +23,17 @@ _WARNED = False  # process-local: warn at most once per invocation
 
 
 def _running_tmux_version():
+    """Read `tmux -V`. Resolves the tmux binary the same way the helper
+    scripts do (TMUX_BIN env var if set, else first `tmux` on PATH) so the
+    version we check against and the version the scripts actually invoke
+    are guaranteed to be the same binary."""
+    import shutil
+    tmux_bin = os.environ.get("TMUX_BIN") or shutil.which("tmux")
+    if not tmux_bin:
+        return None
     try:
         out = subprocess.run(
-            [os.environ.get("TMUX_BIN", "tmux"), "-V"],
+            [tmux_bin, "-V"],
             capture_output=True, text=True, timeout=2,
         ).stdout.strip()
         # "tmux 3.6a" / "tmux next-3.7" / "tmux 3.5"

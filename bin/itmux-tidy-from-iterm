@@ -25,6 +25,7 @@ Edge cases:
 import argparse
 import asyncio
 import os
+import shutil
 import subprocess
 import sys
 
@@ -34,7 +35,10 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from _version_check import warn_if_versions_unverified  # noqa: E402
 warn_if_versions_unverified()
 
-TMUX = "/opt/homebrew/bin/tmux"
+# Resolve tmux at runtime; override with TMUX_BIN env var.
+TMUX = os.environ.get("TMUX_BIN") or shutil.which("tmux")
+if not TMUX:
+    sys.exit("error: tmux not found on PATH (set TMUX_BIN to override)")
 
 
 def tmux_window_to_session_map():

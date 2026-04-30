@@ -14,8 +14,12 @@
 #
 # Loops back to picker after focusing an existing session or refreshing.
 
-TMUX=/opt/homebrew/bin/tmux
-FZF=/opt/homebrew/bin/fzf
+# Resolve tmux + fzf at runtime so we work on Intel/Apple-Silicon Homebrew,
+# MacPorts, source installs, etc. Override with TMUX_BIN / FZF_BIN env vars.
+TMUX="${TMUX_BIN:-$(command -v tmux)}"
+FZF="${FZF_BIN:-$(command -v fzf)}"
+[[ -z "$TMUX" ]] && { print -u2 "error: tmux not found on PATH (set TMUX_BIN to override)"; exit 1; }
+[[ -z "$FZF" ]]  && { print -u2 "error: fzf not found on PATH (set FZF_BIN to override)"; exit 1; }
 SEP='§'
 
 # Version warning (non-fatal). Suppressed by ITMUX_SUPPRESS_VERSION_WARN=1.

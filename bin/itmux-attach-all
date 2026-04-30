@@ -10,6 +10,7 @@ tmux-attach-all: attach every detached tmux session as its own iTerm window.
 
 import asyncio
 import os
+import shutil
 import subprocess
 import sys
 import iterm2
@@ -18,7 +19,11 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from _version_check import warn_if_versions_unverified  # noqa: E402
 warn_if_versions_unverified()
 
-TMUX = "/opt/homebrew/bin/tmux"
+# Resolve tmux at runtime so we work on Intel/Apple-Silicon Homebrew, MacPorts,
+# /usr/local-sourced installs, etc. Override with TMUX_BIN env var if needed.
+TMUX = os.environ.get("TMUX_BIN") or shutil.which("tmux")
+if not TMUX:
+    sys.exit("error: tmux not found on PATH (set TMUX_BIN to override)")
 TAB_LIMIT = 5
 ATTACH_TIMEOUT = 12.0
 POLL_INTERVAL = 0.4
