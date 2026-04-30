@@ -80,17 +80,6 @@ def is_clean(session_entries):
     return len(list(only_window.tabs)) == len(session_entries)
 
 
-def pick_dest(session_entries):
-    """Pick the iTerm window that already holds the most tabs of this session."""
-    counts = {}
-    window_ref = {}
-    for _, _, w in session_entries:
-        counts[w.window_id] = counts.get(w.window_id, 0) + 1
-        window_ref[w.window_id] = w
-    best = max(counts, key=counts.get)
-    return window_ref[best]
-
-
 async def main(connection, apply):
     app = await iterm2.async_get_app(connection)
     wid_to_session = tmux_window_to_session_map()
@@ -105,13 +94,10 @@ async def main(connection, apply):
         if is_clean(entries):
             print(f"  {sess}: already clean ({len(entries)} tabs)")
             continue
-        dest = pick_dest(entries)
-        plan.append((sess, dest, entries))
-        n_in_dest = sum(1 for _, _, w in entries if w.window_id == dest.window_id)
-        print(f"  {sess}: {len(entries)} tabs across "
-              f"{len({w.window_id for _, _, w in entries})} windows "
-              f"→ consolidate into window {dest.window_id} "
-              f"(already has {n_in_dest})")
+        plan.append((sess, entries))
+        n_windows = len({w.window_id for _, _, w in entries})
+        print(f"  {sess}: {len(entries)} tabs across {n_windows} window(s) "
+              f"→ regroup into a fresh iTerm window")
 
     if not plan:
         print("\nNothing to do — all sessions already tidy.")
@@ -121,12 +107,30 @@ async def main(connection, apply):
         print("\n(dry-run) — pass --apply to actually rearrange.")
         return
 
+    # Fresh-window strategy: for each unclean session, extract its first tab
+    # into a brand-new iTerm window via async_move_to_window(), then call
+    # async_set_tabs() on that new window to consolidate the rest.
+    #
+    # Why a fresh window per session and not "pick the dominant window":
+    # if two sessions share one mixed iTerm window, picking that window as
+    # destination for both produces a sequential ping-pong — each session's
+    # async_set_tabs() displaces the other's tabs back into its own (now-
+    # newly-empty) source window. Fresh windows guarantee no two sessions
+    # ever share a destination, so foreign tabs are never disturbed by the
+    # wrong session's iteration.
     print()
-    for sess, dest, entries in plan:
+    for sess, entries in plan:
         ordered_tabs = [tab for _, tab, _ in entries]
         try:
-            await dest.async_set_tabs(ordered_tabs)
-            print(f"  ✓ {sess}: regrouped {len(ordered_tabs)} tabs into one window")
+            new_window = await ordered_tabs[0].async_move_to_window()
+            if new_window is None:
+                print(f"  ✗ {sess}: async_move_to_window returned None",
+                      file=sys.stderr)
+                continue
+            if len(ordered_tabs) > 1:
+                await new_window.async_set_tabs(ordered_tabs)
+            print(f"  ✓ {sess}: regrouped {len(ordered_tabs)} tab(s) "
+                  f"into fresh window {new_window.window_id}")
         except Exception as e:
             print(f"  ✗ {sess}: {e}", file=sys.stderr)
         await app.async_refresh()
