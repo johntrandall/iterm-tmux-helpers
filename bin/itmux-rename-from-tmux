@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""
+itmux-rename-from-tmux: clear iTerm-side title overrides on every tmux-backed
+tab so iTerm reverts to displaying tmux's authoritative window_name.
+
+Inverse of itmux-rename-from-iterm. Use after someone manually renamed iTerm
+tabs (via the Edit Tab Title UI or Python API) and you want to discard those
+overrides and let tmux be the source of truth again.
+
+Default: dry-run (lists how many tabs would be reset). Pass --apply to
+actually clear overrides.
+
+Usage:
+  itmux-rename-from-tmux           # dry-run
+  itmux-rename-from-tmux --apply   # do it
+"""
+
+import argparse
+import asyncio
+import sys
+
+import iterm2
+
+
+async def gather_tmux_tabs(app):
+    tabs = []
+    for w in app.terminal_windows:
+        for tab in list(w.tabs):
+            tw = await tab.async_get_variable("tmuxWindow")
+            if tw is None:
+                continue
+            try:
+                if int(tw) < 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            tn = await tab.async_get_variable("tmuxWindowName") or "?"
+            tabs.append((int(tw), tn, tab))
+    tabs.sort(key=lambda x: x[0])
+    return tabs
+
+
+async def main(connection, apply):
+    app = await iterm2.async_get_app(connection)
+    tabs = await gather_tmux_tabs(app)
+
+    if not tabs:
+        print("No tmux-backed iTerm tabs found.")
+        return
+
+    print(f"Found {len(tabs)} tmux-backed iTerm tabs:")
+    for tw_id, tw_name, _tab in tabs:
+        print(f"  tmuxWindow={tw_id}  name=[{tw_name}]")
+
+    if not apply:
+        print(f"\n(dry-run) — would clear iTerm title overrides on all {len(tabs)} tabs.")
+        print("After clearing, iTerm renders each tab's title from the live tmux window_name.")
+        print("Pass --apply to actually clear.")
+        return
+
+    print()
+    cleared = 0
+    for tw_id, tw_name, tab in tabs:
+        try:
+            await tab.async_set_title("")
+            cleared += 1
+        except Exception as e:
+            print(f"  ✗ tmuxWindow={tw_id}: {e}", file=sys.stderr)
+    print(f"Cleared overrides on {cleared}/{len(tabs)} tabs. iTerm now follows tmux for window names.")
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    p.add_argument("--apply", action="store_true",
+                   help="actually clear overrides (default is dry-run)")
+    return p.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    iterm2.run_until_complete(lambda c: main(c, args.apply))
