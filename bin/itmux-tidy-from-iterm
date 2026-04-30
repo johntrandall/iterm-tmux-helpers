@@ -13,7 +13,7 @@ the dominant session via `tmux move-window`.
 
 iTerm windows containing tabs from only one tmux session: no-op.
 
-Default: dry-run. Pass --apply to actually move tmux windows.
+Default: applies the moves. Pass --dry-run to just preview.
 
 Edge cases:
 - iTerm window with tabs from 2+ sessions tied for "dominant" → uses the
@@ -120,7 +120,7 @@ async def gather_moves(app, wid_to_session):
     return moves
 
 
-async def main(connection, apply):
+async def main(connection, dry_run):
     app = await iterm2.async_get_app(connection)
     wid_to_session = tmux_window_to_session_map()
     moves = await gather_moves(app, wid_to_session)
@@ -133,8 +133,8 @@ async def main(connection, apply):
     for tw_id, src, dst in moves:
         print(f"  @{tw_id}  {src} → {dst}")
 
-    if not apply:
-        print(f"\n(dry-run) — pass --apply to actually run `tmux move-window`")
+    if dry_run:
+        print("\n(--dry-run) — re-run without --dry-run to apply.")
         return
 
     print()
@@ -151,11 +151,11 @@ async def main(connection, apply):
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    p.add_argument("--apply", action="store_true",
-                   help="actually move tmux windows (default is dry-run)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="show planned moves without applying (default: apply)")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    iterm2.run_until_complete(lambda c: main(c, args.apply))
+    iterm2.run_until_complete(lambda c: main(c, args.dry_run))

@@ -10,7 +10,7 @@ sessions. Reads current iTerm state, decides the desired layout, applies it.
 Does NOT attach any detached sessions — pair with `tmux-attach-all` for that.
 Does NOT touch non-tmux iTerm tabs.
 
-Default: dry-run (lists planned moves). Pass --apply to actually rearrange.
+Default: applies the rearrangement. Pass --dry-run to just preview.
 """
 
 import argparse
@@ -89,7 +89,7 @@ def is_clean(session_entries):
     return len(list(only_window.tabs)) == len(session_entries)
 
 
-async def main(connection, apply):
+async def main(connection, dry_run):
     app = await iterm2.async_get_app(connection)
     wid_to_session = tmux_window_to_session_map()
     by_session = await gather_layout(app, wid_to_session)
@@ -112,8 +112,8 @@ async def main(connection, apply):
         print("\nNothing to do — all sessions already tidy.")
         return
 
-    if not apply:
-        print("\n(dry-run) — pass --apply to actually rearrange.")
+    if dry_run:
+        print("\n(--dry-run) — re-run without --dry-run to apply.")
         return
 
     # Fresh-window strategy: for each unclean session, extract its first tab
@@ -161,11 +161,11 @@ async def main(connection, apply):
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    p.add_argument("--apply", action="store_true",
-                   help="actually rearrange (default is dry-run)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="show planned moves without applying (default: apply)")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    iterm2.run_until_complete(lambda c: main(c, args.apply))
+    iterm2.run_until_complete(lambda c: main(c, args.dry_run))

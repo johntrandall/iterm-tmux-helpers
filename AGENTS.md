@@ -42,12 +42,12 @@ itmux-attach-all
 #    multiple windows, etc.). Drive the API via:
 PYTHON="$(brew --prefix)/opt/iterm-tmux-helpers/libexec/bin/python"  # the brew-installed venv with iterm2
 
-# 4. Run the actual binary, dry-run first, then --apply.
+# 4. Run the actual binary. --dry-run first to inspect the plan, then real.
+itmux-tidy-from-tmux --dry-run
 itmux-tidy-from-tmux
-itmux-tidy-from-tmux --apply
 
-# 5. Re-run --apply for idempotency.
-itmux-tidy-from-tmux --apply  # should report all sessions "already clean"
+# 5. Re-run for idempotency.
+itmux-tidy-from-tmux  # should report all sessions "already clean"
 
 # 6. Cleanup ordering: tmux kill BEFORE iTerm window close (otherwise the
 #    Hide/Detach/Kill dialog blocks).
@@ -64,7 +64,7 @@ When designing a scenario, exercise *multiple* edge cases simultaneously, not on
 - A session with a single tab caught in a mixed window (`async_move_to_window` will refuse if it ends up as the sole occupant)
 - A session split across multiple iTerm windows with no foreign tabs in any of them
 - An already-clean session (skip path)
-- Idempotency: a second `--apply` should report all sessions clean
+- Idempotency: a second invocation (no flag, since apply is default) should report all sessions clean
 
 ## Where things live
 

@@ -10,7 +10,7 @@ Small helper scripts for iTerm2 + tmux integration in `-CC` control mode on macO
 |---|---|
 | `itmux-chooser` | fzf session/window picker. Wire it as your iTerm profile command and it becomes the entry-point UI for ad-hoc attach. Prevents duplicate gateways. |
 | `itmux-attach-all` | Attach every detached tmux session as its own iTerm window. Skips already-attached sessions. Spills sessions with > 5 windows into multiple iTerm windows. |
-| `itmux-tidy-from-tmux` | Regroup iTerm tabs so each tmux session lives in its own iTerm window. Use after drag-shuffling. Dry-run by default; `--apply` to act. |
+| `itmux-tidy-from-tmux` | Regroup iTerm tabs so each tmux session lives in its own iTerm window. Use after drag-shuffling. Applies by default; pass `--dry-run` to preview without changes. |
 | `itmux-tidy-from-iterm` | Inverse: read your current iTerm grouping and push it down to tmux as `move-window` operations. "I dragged tabs across iTerm windows on purpose; make tmux match." |
 
 All scripts read iTerm via the iTerm2 Python API (no AppleScript writes) and tmux via the `tmux` CLI. The [behavioral matrix](BEHAVIOR.md) documents which of the iTerm/tmux interactions actually work the way you'd expect — there are several common gotchas.
@@ -108,15 +108,15 @@ defaults write com.googlecode.iterm2 TmuxDashboardLimit -int 50
 ```bash
 itmux-attach-all                  # Set the world to a known state every login
 itmux-chooser                     # Open a window, pick a session — used by the iTerm profile command
-itmux-tidy-from-tmux              # Dry-run after a messy drag session
-itmux-tidy-from-tmux --apply      # Actually rearrange
+itmux-tidy-from-tmux              # Apply the rearrangement (default)
+itmux-tidy-from-tmux --dry-run    # Just preview, don't change anything
 ```
 
 ### After deliberately re-grouping in iTerm
 
 ```bash
-itmux-tidy-from-iterm             # Show what tmux moves would match your iTerm grouping
-itmux-tidy-from-iterm --apply     # Execute the tmux move-window operations
+itmux-tidy-from-iterm             # Apply (default): execute the tmux move-window operations
+itmux-tidy-from-iterm --dry-run   # Just show what tmux moves would match your iTerm grouping
 ```
 
 ## Further reading
