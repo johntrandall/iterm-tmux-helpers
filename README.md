@@ -30,6 +30,10 @@ brew tap johntrandall/tap
 brew install iterm-tmux-helpers
 ```
 
+This bundles the `iterm2` Python package and its dependencies into a private venv — you do **not** need to install `iterm2` into your system Python. `tmux` and `fzf` are pulled in as Homebrew dependencies.
+
+The binaries land at `$(brew --prefix)/bin/itmux-*` (typically `/opt/homebrew/bin/` on Apple Silicon).
+
 ### Manual
 
 ```bash
@@ -40,23 +44,31 @@ cd iterm-tmux-helpers
 
 The installer symlinks `bin/itmux-*` into `~/.local/bin/`. Make sure that's on your `PATH`.
 
+You'll also need to install the dependencies yourself (see below).
+
 ### Dependencies
+
+Required for both install paths:
 
 - macOS (uses iTerm2's macOS-specific Python API)
 - iTerm2 with the **Python API enabled** (Settings → General → Magic → Enable Python API)
+
+For **Homebrew installs**, `tmux`, `fzf`, `python@3.13`, and the `iterm2` Python package + its deps are all installed automatically.
+
+For **manual installs**, you need to install:
+
 - `tmux` 3.x (`brew install tmux`)
 - `fzf` (`brew install fzf`)
 - Python 3.10+ with the `iterm2` package: `python3 -m pip install --user iterm2` *or* a pipx venv (`pipx install iterm2`).
 
-The scripts use `#!/usr/bin/env python3`, so whatever python3 is first on your `PATH` is what they'll use. If `import iterm2` fails, install the package into that interpreter.
+For the manual install path, the scripts use `#!/usr/bin/env python3`, so whatever python3 is first on your `PATH` is what they'll use. If `import iterm2` fails, install the package into that interpreter.
 
 ## Configure iTerm to launch the chooser
 
 Open iTerm Settings → Profiles → your default profile → General. Set **Command** to:
 
-```
-~/.local/bin/itmux-chooser
-```
+- **Homebrew install:** `/opt/homebrew/bin/itmux-chooser` (or run `which itmux-chooser` to confirm the path on your system)
+- **Manual install:** `~/.local/bin/itmux-chooser`
 
 Now Cmd-N (or any new-window action that uses the default profile) drops into the picker.
 
