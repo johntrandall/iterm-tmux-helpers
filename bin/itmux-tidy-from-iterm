@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""
+itmux-tidy-from-iterm: read current iTerm tab grouping and push it down to
+tmux as `move-window` operations.
+
+Inverse of itmux-tidy-from-tmux. Use after you drag-rearranged iTerm tabs
+across windows and want tmux's session structure to match.
+
+Algorithm: for each iTerm window, determine the "dominant" tmux session
+(the one most of its tabs already belong to). Any tab in that iTerm window
+whose tmux window currently belongs to a *different* session is moved to
+the dominant session via `tmux move-window`.
+
+iTerm windows containing tabs from only one tmux session: no-op.
+
+Default: dry-run. Pass --apply to actually move tmux windows.
+
+Edge cases:
+- iTerm window with tabs from 2+ sessions tied for "dominant" → uses the
+  one with the lowest tmux window-id (stable but arbitrary).
+- Non-tmux iTerm tabs are ignored.
+- Detached tmux sessions are ignored (no iTerm presence).
+"""
+
+import argparse
+import asyncio
+import subprocess
+import sys
+
+import iterm2
+
+TMUX = "/opt/homebrew/bin/tmux"
+
+
+def tmux_window_to_session_map():
+    """Return {tmux_window_id_int: session_name}."""
+    r = subprocess.run(
+        [TMUX, "list-windows", "-a", "-F", "#{window_id}\t#{session_name}"],
+        capture_output=True, text=True,
+    )
+    out = {}
+    for line in r.stdout.strip().split("\n"):
+        if not line:
+            continue
+        wid, sess = line.split("\t", 1)
+        wid = wid.lstrip("@")
+        try:
+            out[int(wid)] = sess
+        except ValueError:
+            continue
+    return out
+
+
+def tmux_move_window(window_id, target_session):
+    r = subprocess.run(
+        [TMUX, "move-window", "-s", f"@{window_id}", "-t", f"{target_session}:"],
+        capture_output=True, text=True,
+    )
+    return r.returncode == 0, r.stderr.strip()
+
+
+async def gather_moves(app, wid_to_session):
+    """Return list of (window_id, current_session, target_session) for each
+    iTerm-driven move that would propagate to tmux."""
+    moves = []
+    for w in app.terminal_windows:
+        # Collect tmux-backed tabs in this iTerm window with their session
+        tabs_info = []
+        for tab in list(w.tabs):
+            tw_var = await tab.async_get_variable("tmuxWindow")
+            if tw_var is None:
+                continue
+            try:
+                tw_id = int(tw_var)
+            except (TypeError, ValueError):
+                continue
+            if tw_id < 0:
+                continue
+            sess = wid_to_session.get(tw_id)
+            if not sess:
+                continue
+            tabs_info.append((tw_id, sess))
+
+        if not tabs_info:
+            continue
+
+        # Determine dominant session in this iTerm window
+        sess_counts = {}
+        for tw_id, sess in tabs_info:
+            sess_counts[sess] = sess_counts.get(sess, 0) + 1
+
+        # Tie-break: pick session whose lowest window_id is smallest
+        max_count = max(sess_counts.values())
+        contenders = [s for s, c in sess_counts.items() if c == max_count]
+        if len(contenders) == 1:
+            target = contenders[0]
+        else:
+            min_wid_per_sess = {}
+            for tw_id, sess in tabs_info:
+                if sess in contenders:
+                    min_wid_per_sess[sess] = min(
+                        min_wid_per_sess.get(sess, tw_id), tw_id
+                    )
+            target = min(min_wid_per_sess, key=lambda s: min_wid_per_sess[s])
+
+        # Any tab not in target session needs to move
+        for tw_id, sess in tabs_info:
+            if sess != target:
+                moves.append((tw_id, sess, target))
+
+    return moves
+
+
+async def main(connection, apply):
+    app = await iterm2.async_get_app(connection)
+    wid_to_session = tmux_window_to_session_map()
+    moves = await gather_moves(app, wid_to_session)
+
+    if not moves:
+        print("Nothing to move — tmux already matches the iTerm grouping.")
+        return
+
+    print(f"Found {len(moves)} tmux window(s) to move based on iTerm grouping:")
+    for tw_id, src, dst in moves:
+        print(f"  @{tw_id}  {src} → {dst}")
+
+    if not apply:
+        print(f"\n(dry-run) — pass --apply to actually run `tmux move-window`")
+        return
+
+    print()
+    succeeded = 0
+    for tw_id, src, dst in moves:
+        ok, err = tmux_move_window(tw_id, dst)
+        if ok:
+            succeeded += 1
+            print(f"  ✓ @{tw_id}: {src} → {dst}")
+        else:
+            print(f"  ✗ @{tw_id}: {err}", file=sys.stderr)
+    print(f"\n{succeeded}/{len(moves)} windows moved.")
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    p.add_argument("--apply", action="store_true",
+                   help="actually move tmux windows (default is dry-run)")
+    return p.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    iterm2.run_until_complete(lambda c: main(c, args.apply))
