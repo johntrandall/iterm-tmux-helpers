@@ -118,8 +118,21 @@ async def main(connection, apply):
     # newly-empty) source window. Fresh windows guarantee no two sessions
     # ever share a destination, so foreign tabs are never disturbed by the
     # wrong session's iteration.
+    #
+    # Re-evaluating cleanliness mid-loop: when N sessions share one mixed
+    # iTerm window, processing N-1 of them displaces foreign tabs out of
+    # that window, leaving the Nth session as the sole occupant. The Nth
+    # session is then already in its own pure window and needs no move.
+    # Without the re-check, async_move_to_window() would fail with "Window
+    # has only one tab" — iTerm refuses to move a tab if doing so would
+    # leave the source window empty.
     print()
     for sess, entries in plan:
+        await app.async_refresh()
+        if is_clean(entries):
+            print(f"  ⊙ {sess}: became clean during apply (foreign tabs "
+                  f"displaced by earlier sessions) — no move needed")
+            continue
         ordered_tabs = [tab for _, tab, _ in entries]
         try:
             new_window = await ordered_tabs[0].async_move_to_window()
@@ -133,7 +146,6 @@ async def main(connection, apply):
                   f"into fresh window {new_window.window_id}")
         except Exception as e:
             print(f"  ✗ {sess}: {e}", file=sys.stderr)
-        await app.async_refresh()
 
     print("\nDone.")
 
