@@ -127,8 +127,8 @@ elif has_cc_client "$session_name"; then
   fi
   continue
 elif [[ "$action" == "_NEW_WINDOW_" ]]; then
-  # Session line: create a new window, then attach
-  $TMUX new-window -t "$session_name"
+  # Session line: attach to existing windows. Do NOT create a new window —
+  # that produced a spurious "zsh"-named tab on every session-level pick.
   exec $TMUX -CC new-session -A -s "$session_name"
 else
   # Window line: focus that window, then attach
